@@ -8,15 +8,12 @@ import qualified Data.HashMap.Strict as M
 
 import Scmi.Types
 
-runScmi :: Scmi a -> Env -> IO (Either ScmiError a)
-runScmi = runReaderT . runErrorT . unScmi
-
 findBinding :: Ident -> Scmi (IORef Expr)
-findBinding name = ask >>= findBindingRec . unEnv
+findBinding name = ask >>= liftIO . readIORef >>= findBindingRec . unEnv
   where
-    findBindingRec env = case env of
+    findBindingRec fs = case fs of
         [] -> throwError $ UnboundVariable name
-        frame:fs -> maybe (findBindingRec fs) return $ M.lookup name frame
+        frame:frames -> maybe (findBindingRec frames) return $ M.lookup name frame
 
 getBinding :: Ident -> Scmi Expr
 getBinding name = findBinding name >>= liftIO . readIORef
@@ -24,34 +21,84 @@ getBinding name = findBinding name >>= liftIO . readIORef
 updateBinding :: Ident -> Expr -> Scmi ()
 updateBinding name expr = findBinding name >>= liftIO . (`writeIORef` expr)
 
-isTrue :: Expr -> Bool
-isTrue expr = case expr of
-    Boolean False -> False
-    Unspecified -> False
-    _ -> True
+addBinding :: Ident -> Expr -> Scmi ()
+addBinding name expr = do
+    envRef <- ask
+    frames <- liftIO $ unEnv <$> readIORef envRef
+    case frames of
+        [] -> throwError $ InternalError "empty frame stack"
+        f:fs -> do
+            exprRef <- liftIO $ newIORef expr
+            liftIO $ writeIORef envRef $ Env $ (M.insert name exprRef f) : fs
 
 eval :: Expr -> Scmi Expr
 eval e = case e of
-    Number _ -> return e
-    Boolean _ -> return e
-    Pair _ _ -> return e
-    EmptyList -> return e
-    Unspecified -> return e
-    Var name -> getBinding name
-    Quotation expr -> return expr
-    Assignment name expr -> eval expr >>= updateBinding name >> return Unspecified
-    Definition name expr -> undefined
-    Conditional cond conseq alt -> eval cond >>= \p -> eval $ if isTrue p then conseq else alt
-    Lambda args body -> Procedure args (Sequence body) <$> ask
-    Sequence exprs -> evalSequence exprs
-    Application proc args -> eval proc >>= \proc' -> mapM eval args >>= \args' -> apply proc' args'
-    Procedure _ _ _ -> return e
-    Primitive _ -> return e
+    Symbol sym -> getBinding sym
+    List exprs -> evalList exprs
+    ImproperList _ _ -> throwError $ UserError $ "can't evaluate improper list: " ++ show e
+    _ -> return e
+
+evalList :: [Expr] -> Scmi Expr
+evalList [] = throwError $ UserError "empty list"
+evalList es@(sym:body) = case sym of
+    Symbol (Ident "quote") -> evalQuotation
+    Symbol (Ident "set!") -> evalAssignment
+    Symbol (Ident "define") -> evalDefinition
+    Symbol (Ident "if") -> evalConditional
+    Symbol (Ident "lambda") -> evalLambda
+    Symbol (Ident "begin") -> evalSequence body
+    _ -> evalProcedure
   where
-    evalSequence exprs = case exprs of
-        [] -> return Unspecified
-        [ex] -> eval ex
-        ex:exs -> eval ex >> evalSequence exs
+    evalQuotation = case body of
+        [expr] -> return expr
+        _ -> listSyntaxError
+    evalAssignment = case body of
+        [Symbol name, expr] -> eval expr >>= updateBinding name >> return Unspecified
+        _ -> listSyntaxError
+    evalDefinition = case body of
+        [Symbol name, expr] -> eval expr >>= addBinding name >> return Unspecified
+        _ -> listSyntaxError
+    evalConditional = case body of
+        [cond, conseq] -> eval cond >>= evalIf conseq Unspecified
+        [cond, conseq, alt] -> eval cond >>= evalIf conseq alt
+        _ -> listSyntaxError
+    evalLambda = case body of
+        List args : body@(_:_) -> mkProc args Nothing body
+        _ -> listSyntaxError
+    evalProcedure = do
+        proc <- eval sym
+        args <- mapM eval body
+        apply proc args
+    listSyntaxError = throwError $ SyntaxError $ List es
+    evalIf t f p = eval $ if isTrue p then t else f
+    isTrue e = case e of
+        Boolean False -> False
+        Unspecified -> False
+        _ -> True
+    mkProc args vararg body =
+        Procedure <$> mapM toIdent args <*> pure vararg <*> pure body <*> (ask >>= liftIO . readIORef)
+    toIdent e = case e of
+        Symbol ident -> return ident
+        _ -> throwError $ SyntaxError e
+
+evalSequence :: [Expr] -> Scmi Expr
+evalSequence es = case es of
+    [] -> return Unspecified
+    [expr] -> eval expr
+    expr:exprs -> eval expr >> evalSequence exprs
+
+apply :: Expr -> [Expr] -> Scmi Expr
+apply proc actuals = case proc of
+    Procedure formals mvararg body env -> do
+        frame <- makeFrame formals actuals
+        runScmiLocal (evalSequence body) (extendEnv frame env)
+    Primitive prim -> prim actuals
+    _ -> throwError $ InvalidApplication proc actuals
+  where
+    extendEnv frame = Env . (frame :) . unEnv
+
+runScmiLocal :: Scmi a -> Env -> Scmi a
+runScmiLocal scmi env = liftIO (newIORef env) >>= liftIO . runScmi scmi >>= either throwError return
 
 makeFrame :: [Ident] -> [Expr] -> Scmi Frame
 makeFrame formals actuals
@@ -63,16 +110,3 @@ makeFrame formals actuals
     where
       formalsCount = length formals
       actualsCount = length actuals
-
-rewrapScmi :: Scmi a -> Env -> Scmi a
-rewrapScmi scmi env = liftIO (runScmi scmi env) >>= either throwError return
-
-apply :: Expr -> [Expr] -> Scmi Expr
-apply proc actuals = case proc of
-    Procedure formals body env -> do
-        frame <- makeFrame formals actuals
-        rewrapScmi (eval body) (extendEnv frame env)
-    Primitive prim -> prim actuals
-    _ -> throwError $ InvalidApplication proc actuals
-  where
-    extendEnv frame = Env . (frame :) . unEnv
