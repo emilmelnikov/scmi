@@ -17,7 +17,12 @@ lexeme :: Parser a -> Parser a
 lexeme = (<* spaces)
 
 exprP :: Parser Expr
-exprP = choice $ map try [symbolP, numberP, booleanP, listP]
+exprP = choice $ map try [quoteP, symbolP, numberP, booleanP, listP]
+
+quoteP :: Parser Expr
+quoteP = do
+    expr <- char '\'' *> exprP
+    return $ List [Symbol (Ident "quote"), expr]
 
 symbolP :: Parser Expr
 symbolP = lexeme $ (Symbol . Ident) <$> identifier
