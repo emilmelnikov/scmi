@@ -33,4 +33,8 @@ executable "scmi"
   main-is: Main.hs
   build-depends:
     base ==4.6.*,
+    hashable ==1.1.*,
+    mtl ==2.1.*,
+    parsec ==3.1.*,
+    unordered-containers ==0.2.*,
     scmi ==0.1.*

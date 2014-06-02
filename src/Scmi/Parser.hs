@@ -17,12 +17,27 @@ lexeme :: Parser a -> Parser a
 lexeme = (<* spaces)
 
 exprP :: Parser Expr
-exprP = choice $ map try [quoteP, symbolP, numberP, booleanP, listP]
+exprP = choice $ map try [quoteP, quasiquoteP, unquoteP, unquoteSplicingP, symbolP, numberP, booleanP, listP]
 
 quoteP :: Parser Expr
 quoteP = do
     expr <- char '\'' *> exprP
     return $ List [Symbol (Ident "quote"), expr]
+
+quasiquoteP :: Parser Expr
+quasiquoteP = do
+    expr <- char '`' *> exprP
+    return $ List [Symbol (Ident "quasiquote"), expr]
+
+unquoteP :: Parser Expr
+unquoteP = do
+    expr <- char ',' *> exprP
+    return $ List [Symbol (Ident "unquote"), expr]
+
+unquoteSplicingP :: Parser Expr
+unquoteSplicingP = do
+    expr <- string ",@" *> exprP
+    return $ List [Symbol (Ident "unquote-splicing"), expr]
 
 symbolP :: Parser Expr
 symbolP = lexeme $ (Symbol . Ident) <$> identifier

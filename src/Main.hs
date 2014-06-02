@@ -1,4 +1,6 @@
 module Main (main) where
 
+import Scmi.Interpreter
+
 main :: IO ()
-main = return ()
+main = repl

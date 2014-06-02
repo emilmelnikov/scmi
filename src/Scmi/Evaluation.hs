@@ -42,6 +42,9 @@ evalList :: [Expr] -> Scmi Expr
 evalList [] = throwError $ UserError "empty list"
 evalList es@(sym:body) = case sym of
     Symbol (Ident "quote") -> evalQuotation
+    Symbol (Ident "quasiquote") -> evalQuasiquote
+    Symbol (Ident "unquote") -> evalUnquote
+    Symbol (Ident "unquote-splicing") -> evalUnquoteSplicing
     Symbol (Ident "set!") -> evalAssignment
     Symbol (Ident "define") -> evalDefinition
     Symbol (Ident "if") -> evalConditional
@@ -50,6 +53,15 @@ evalList es@(sym:body) = case sym of
     _ -> evalProcedure
   where
     evalQuotation = case body of
+        [expr] -> return expr
+        _ -> listSyntaxError
+    evalQuasiquote = case body of
+        [expr] -> return expr
+        _ -> listSyntaxError
+    evalUnquote = case body of
+        [expr] -> return expr
+        _ -> listSyntaxError
+    evalUnquoteSplicing = case body of
         [expr] -> return expr
         _ -> listSyntaxError
     evalAssignment = case body of
